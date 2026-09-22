@@ -178,7 +178,7 @@
         continue;
       }
 
-      // 普通段落：收集到空行或下一个块语法开头
+      // 普通段落：收集到空行或下一个块语法开头；单次换行按标准 Markdown 软换行处理（空格连接，不产生 <br>）
       var para = [];
       while (i < lines.length) {
         var l = lines[i];
@@ -190,7 +190,7 @@
         para.push(l);
         i++;
       }
-      html += '<p>' + inline(para.join('<br>')) + '</p>';
+      html += '<p>' + inline(para.join(' ')) + '</p>';
     }
 
     return html;

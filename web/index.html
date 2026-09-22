@@ -60,10 +60,11 @@ try { document.body.classList.toggle('dark', localStorage.getItem('onlinenote-th
     </aside>
 
     <main id="editor-pane">
-      <!-- 源码模式：纯文本 Markdown -->
+      <!-- 源码模式：一个大的文本框，和本地编辑 .md 文件一样 -->
       <textarea id="src-editor" class="hidden" placeholder="在左侧选择或新建一篇笔记开始编辑…" spellcheck="false"></textarea>
-      <!-- 预览模式：渲染后的块，点击即可就地编辑 -->
+      <!-- 预览模式：纯渲染效果，点击任意位置回到源码编辑 -->
       <div id="wysiwyg" class="wysiwyg"></div>
+      <div id="mode-hint" class="mode-hint"></div>
     </main>
   </div>
 </div>
