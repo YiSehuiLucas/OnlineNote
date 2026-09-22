@@ -241,6 +241,18 @@
     }
   }
 
+  // 计算节点子树内的纯文本长度（<br> 不计入）
+  function textLenOf(node) {
+    if (node.nodeType === 3) return node.textContent.length;
+    var len = 0;
+    walkNodes(node, function (n) {
+      if (n === node) return false;
+      if (n.nodeType === 3) { len += n.textContent.length; return false; }
+      return false;
+    });
+    return len;
+  }
+
   // 光标：DOM 选区 → 块索引 + 块内 DOM 文本偏移
   function getCaretBlockAndDom() {
     var sel = window.getSelection ? window.getSelection() : null;
@@ -253,7 +265,15 @@
     var domOff = 0;
     walkNodes(blkEl, function (n) {
       if (n === node) {
-        if (n.nodeType === 3) domOff += off;
+        if (n.nodeType === 3) {
+          domOff += off;
+        } else {
+          // 元素锚点（浏览器在段落末尾常见）：offset = 子节点序号，
+          // 统计其之前所有子节点的文本长度
+          for (var ci = 0; ci < off && ci < n.childNodes.length; ci++) {
+            domOff += textLenOf(n.childNodes[ci]);
+          }
+        }
         return true;
       }
       if (n.nodeType === 3) { domOff += n.textContent.length; return false; }

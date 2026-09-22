@@ -66,25 +66,38 @@
       var colInBody = Math.max(0, lc2.col - mlen);
       var leftBody = body.slice(0, colInBody);
       var rightBody = body.slice(colInBody);
-      var newLeft = (m ? m[0] : mk) + leftBody;
-      var newRight = mk + rightBody;
-      var nl = blines.slice(0, lc2.line).concat([newLeft]);
-      if (rightBody === '') {
-        nl.push(mk); // 空列表项/引用行
+      if (body === '' && rightBody === '') {
+        // 空列表项/空引用行回车：退出列表/引用，变为普通段落（Typora 语义）
+        var exitLines = blines.slice(0, lc2.line);
+        exitLines.push('', '');
+        newLines = exitLines.concat(blines.slice(lc2.line + 1));
         caretLine = b.start + lc2.line + 1;
       } else {
-        nl.push(newRight);
-        caretLine = b.start + lc2.line + 1;
+        var newLeft = (m ? m[0] : mk) + leftBody;
+        var newRight = mk + rightBody;
+        var nl = blines.slice(0, lc2.line).concat([newLeft]);
+        if (rightBody === '') {
+          nl.push(mk); // 空列表项/引用行
+          caretLine = b.start + lc2.line + 1;
+        } else {
+          nl.push(newRight);
+          caretLine = b.start + lc2.line + 1;
+        }
+        newLines = nl.concat(blines.slice(lc2.line + 1));
       }
-      newLines = nl.concat(blines.slice(lc2.line + 1));
     } else {
       // 段落
       var lc3 = lineCol(raw, off);
       var leftP = blines[lc3.line].slice(0, lc3.col);
       var rightP = blines[lc3.line].slice(lc3.col);
       var nl2 = blines.slice(0, lc3.line).concat([leftP]);
-      if (rightP === '') {
-        // 行尾回车：插入分隔空行 + 空段落行（两行），保证后续输入不并入上一段
+      var allBlank = blines.join('').replace(/[\s\n]/g, '') === '';
+      if (rightP === '' && allBlank) {
+        // 空段落回车：仅新增一行（现有空行作为分隔，避免空行膨胀）
+        nl2.push('');
+        caretLine = b.start + lc3.line + 1;
+      } else if (rightP === '') {
+        // 行尾回车：插入分隔空行 + 空段落行（两行）
         nl2.push('', '');
         caretLine = b.start + lc3.line + 2;
       } else {
