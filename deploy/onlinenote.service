@@ -1,0 +1,16 @@
+# OnlineNote systemd 服务单元
+# 用法：复制到 /etc/systemd/system/onlinenote.service，
+#      然后 systemctl daemon-reload && systemctl enable --now onlinenote
+[Unit]
+Description=OnlineNote
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/onlinenote
+ExecStart=/opt/onlinenote/bin/note -config /opt/onlinenote/configs/config.yaml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

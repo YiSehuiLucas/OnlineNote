@@ -1,0 +1,15 @@
+# OnlineNote 配置示例
+server:
+  addr: "127.0.0.1:8080"        # 仅本机监听，生产环境由 nginx 反向代理对外
+  static: "./web"               # 前端静态目录（开发模式由 Go 直接托管；目录不存在时纯 API 模式）
+
+auth:
+  max_users: 5                  # 注册人数上限（含预置账号）
+  session_secret: "change-me"   # 会话签名密钥，部署时务必修改！
+  session_max_age_hours: 168    # 会话有效期（小时）
+
+storage:
+  root: "./data/notes"          # 笔记根目录（真实文件树）
+
+database:
+  path: "./data/note.db"        # SQLite 数据库文件

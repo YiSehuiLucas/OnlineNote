@@ -1,0 +1,239 @@
+/* ============ 基础 ============ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: #333;
+  background: #f5f6f8;
+}
+
+.hidden { display: none !important; }
+
+button {
+  padding: 6px 12px;
+  border: 1px solid #d0d4da;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover { background: #f0f2f5; }
+
+input {
+  width: 100%;
+  padding: 9px 10px;
+  margin-bottom: 12px;
+  border: 1px solid #d0d4da;
+  border-radius: 5px;
+  font-size: 14px;
+}
+input:focus { outline: none; border-color: #4a7cf7; }
+
+/* ============ 登录 / 注册 ============ */
+.auth-wrap {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #2b3a55 0%, #1d2b45 100%);
+}
+
+.auth-card {
+  width: 340px;
+  padding: 36px 30px 26px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+
+.brand-title { font-size: 26px; text-align: center; margin-bottom: 24px; color: #1d2b45; }
+
+.primary-btn {
+  width: 100%;
+  padding: 10px;
+  margin-top: 4px;
+  background: #4a7cf7;
+  border: none;
+  color: #fff;
+  font-size: 15px;
+  letter-spacing: 4px;
+}
+.primary-btn:hover { background: #3b6ae0; }
+
+.switch { margin-top: 14px; text-align: center; color: #888; font-size: 13px; }
+.switch a { color: #4a7cf7; text-decoration: none; }
+
+.error {
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: #fdecea;
+  color: #c0392b;
+  font-size: 13px;
+}
+
+/* ============ 主界面布局 ============ */
+#main-view { height: 100%; display: flex; flex-direction: column; }
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+  height: 48px;
+  background: #1d2b45;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.brand { font-size: 16px; font-weight: 600; }
+.current-file { flex: 1; color: #b8c4da; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+.username { color: #b8c4da; font-size: 13px; }
+.save-status { color: #7fd08a; font-size: 12px; min-width: 48px; text-align: right; }
+#save-btn { background: #4a7cf7; color: #fff; border: none; }
+#save-btn:hover { background: #3b6ae0; }
+#logout-btn { background: transparent; color: #cfd8ea; border: 1px solid #43506b; }
+#logout-btn:hover { background: #2a3a58; }
+
+.layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ============ 左侧目录树 ============ */
+#sidebar {
+  width: 260px;
+  background: #fff;
+  border-right: 1px solid #e3e6ea;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-tools {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-bottom: 1px solid #eef0f3;
+}
+.sidebar-tools button { flex: 1; font-size: 12px; }
+
+.tree { flex: 1; overflow: auto; padding: 6px 0 20px; }
+.tree ul { list-style: none; }
+.tree-children { display: block; }
+.tree-children.collapsed { display: none; }
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.tree-row:hover { background: #f0f3f8; }
+.tree-row.active { background: #e3ecff; }
+
+.tree-icon.dir { color: #8892a6; font-size: 12px; transition: transform 0.15s; }
+.tree-icon.dir.open { transform: rotate(90deg); }
+.tree-icon.file { font-size: 13px; }
+.tree-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+
+/* ============ 中间编辑器 / 右侧预览 ============ */
+#editor-pane, #preview-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+#editor {
+  flex: 1;
+  border: none;
+  resize: none;
+  padding: 16px 18px;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 14px;
+  line-height: 1.7;
+  outline: none;
+  background: #fafbfc;
+}
+
+#preview-pane { border-left: 1px solid #e3e6ea; background: #fff; overflow: auto; }
+#preview { padding: 16px 20px 40px; width: 100%; }
+
+/* ============ Markdown 渲染 ============ */
+.markdown-body { line-height: 1.75; word-wrap: break-word; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  margin: 1.2em 0 0.5em;
+  line-height: 1.3;
+}
+.markdown-body h1 { font-size: 1.7em; border-bottom: 1px solid #e8ebef; padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.4em; border-bottom: 1px solid #eef0f3; padding-bottom: 0.25em; }
+.markdown-body h3 { font-size: 1.2em; }
+.markdown-body p { margin: 0.6em 0; }
+.markdown-body hr { border: none; border-top: 1px solid #e3e6ea; margin: 1.2em 0; }
+.markdown-body blockquote {
+  margin: 0.8em 0;
+  padding: 2px 14px;
+  border-left: 4px solid #c8d2e2;
+  background: #f7f9fc;
+  color: #5a6577;
+}
+.markdown-body ul, .markdown-body ol { margin: 0.6em 0; padding-left: 1.8em; }
+.markdown-body li { margin: 0.2em 0; }
+.markdown-body code {
+  font-family: Consolas, "Courier New", monospace;
+  background: #f0f2f5;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+.markdown-body pre {
+  background: #1d2b45;
+  color: #dbe4f5;
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow: auto;
+  margin: 0.8em 0;
+}
+.markdown-body pre code { background: transparent; padding: 0; color: inherit; }
+.markdown-body img { max-width: 100%; }
+.markdown-body a { color: #4a7cf7; }
+
+/* ============ 右键菜单 ============ */
+.ctx-menu {
+  position: fixed;
+  z-index: 999;
+  min-width: 130px;
+  background: #fff;
+  border: 1px solid #dde1e7;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+}
+.ctx-menu div { padding: 7px 14px; cursor: pointer; font-size: 13px; }
+.ctx-menu div:hover { background: #f0f3f8; }
+.ctx-menu div.danger { color: #c0392b; }
+
+/* ============ Toast ============ */
+.toast {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: rgba(29, 43, 69, 0.92);
+  color: #fff;
+  padding: 9px 18px;
+  border-radius: 6px;
+  font-size: 13px;
+}

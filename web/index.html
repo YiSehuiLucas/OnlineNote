@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OnlineNote</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ 登录 / 注册视图 ============ -->
+<div id="auth-view" class="auth-wrap">
+  <div class="auth-card">
+    <h1 class="brand-title">📝 OnlineNote</h1>
+    <div id="auth-error" class="error hidden"></div>
+
+    <div id="login-form">
+      <input id="login-username" placeholder="用户名" autocomplete="username">
+      <input id="login-password" type="password" placeholder="密码" autocomplete="current-password">
+      <button id="login-btn" class="primary-btn">登 录</button>
+      <p class="switch">还没有账号？<a id="to-register" href="javascript:void(0)">注册（名额有限）</a></p>
+    </div>
+
+    <div id="register-form" class="hidden">
+      <input id="reg-username" placeholder="用户名（2-32 位字母、数字、_ 或 -）">
+      <input id="reg-password" type="password" placeholder="密码（6-72 位）">
+      <input id="reg-password2" type="password" placeholder="确认密码">
+      <button id="register-btn" class="primary-btn">注 册</button>
+      <p class="switch">已有账号？<a id="to-login" href="javascript:void(0)">去登录</a></p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 主界面视图 ============ -->
+<div id="main-view" class="hidden">
+  <header>
+    <div class="brand">📝 OnlineNote</div>
+    <div id="current-file" class="current-file">未选择笔记</div>
+    <div class="header-right">
+      <span id="save-status" class="save-status"></span>
+      <button id="save-btn">保存</button>
+      <span id="username" class="username"></span>
+      <button id="logout-btn">退出</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside id="sidebar">
+      <div class="sidebar-tools">
+        <button id="new-file-btn" title="新建笔记">＋ 笔记</button>
+        <button id="new-dir-btn" title="新建文件夹">🗀 文件夹</button>
+        <button id="refresh-btn" title="刷新目录树">⟳</button>
+      </div>
+      <div id="tree" class="tree"></div>
+    </aside>
+
+    <main id="editor-pane">
+      <textarea id="editor" placeholder="在左侧选择或新建一篇笔记开始编辑…" spellcheck="false"></textarea>
+    </main>
+
+    <aside id="preview-pane">
+      <div id="preview" class="markdown-body"></div>
+    </aside>
+  </div>
+</div>
+
+<!-- 右键菜单 -->
+<div id="ctx-menu" class="ctx-menu hidden"></div>
+<!-- 提示 -->
+<div id="toast" class="toast hidden"></div>
+
+<script src="md.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
