@@ -233,7 +233,7 @@ header {
   color: var(--text);
 }
 
-/* 预览容器（纯渲染效果） */
+/* 预览容器（所见即所得编辑区） */
 #wysiwyg {
   flex: 1;
   overflow: auto;
@@ -242,7 +242,13 @@ header {
   margin: 0 auto;
   width: 100%;
   cursor: text;
+  caret-color: var(--accent);
 }
+
+/* 可编辑块 */
+#wysiwyg [contenteditable="true"] { outline: none; }
+#wysiwyg [contenteditable="true"]:focus { outline: none; }
+#wysiwyg .md-blk::selection { background: rgba(74, 124, 247, 0.25); }
 
 .blk-empty {
   color: var(--muted);

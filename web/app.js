@@ -1,21 +1,30 @@
 /**
- * OnlineNote 前端逻辑（v1.4，零构建）
- * - 编辑体验等同本地 Markdown 文件：一个大的文本框，Enter 即换行
- * - 单窗格「源码 ⇄ 预览」切换（Ctrl+/ 或顶部按钮），预览为纯渲染效果
- * - 预览中点击任意位置会跳回源码模式并把光标定位到对应行
- * - SVG 图标目录树、夜间主题切换（localStorage 记忆）
+ * OnlineNote 前端逻辑（v1.5，零构建）
+ * - Typora 式所见即所得：直接在预览（渲染效果）中书写，输入即实时渲染
+ *   （输入 # 变标题、**文字** 变粗体、- 变列表……）
+ * - 每次输入后整文档重渲染，并通过源码⇄DOM 位置映射精确恢复光标
+ * - 中文输入法（IME）组合期间不重渲染，组合结束再渲染
+ * - Ctrl+/ 切换源码模式（大文本框）；Ctrl+Z 撤销；Ctrl+S 保存
+ * - SVG 图标目录树、夜间主题
  */
 (function () {
   'use strict';
 
   var state = {
     tree: null,
-    currentPath: null,   // 当前打开的文件（含 .md）
+    currentPath: null,
     currentName: '',
-    selectedDir: '',     // 工具栏"新建"作用的目录（"" 表示根目录）
+    selectedDir: '',
     dirty: false,
     username: '',
-    mode: 'preview'      // 'source' | 'preview'
+    mode: 'preview',        // 'source' | 'preview'
+    lines: [],              // 文档源行（编辑模型）
+    blocks: [],             // 当前文档块（docBlocks() 解析）
+    maps: [],               // 每块的 srcAtDom / domAtSrc 映射
+    undoStack: [],          // [{text, caret:{i,off}}]
+    composing: false,
+    compStart: null,        // 输入法组合开始时的光标位置
+    compLines: null         // 输入法组合开始时的源行快照
   };
 
   function $(id) { return document.getElementById(id); }
@@ -96,7 +105,7 @@
     updateThemeBtn();
   }
 
-  /* ---------- 源码 / 预览模式 ---------- */
+  /* ---------- 模式 ---------- */
   function updateModeBtn() {
     var btn = $('mode-btn');
     btn.innerHTML = state.mode === 'preview'
@@ -106,59 +115,304 @@
 
   function updateModeHint() {
     $('mode-hint').textContent = state.mode === 'preview'
-      ? '预览模式 · 点击正文或 Ctrl+/ 进入编辑'
+      ? '预览模式 · 点击正文直接编写，输入即渲染（Ctrl+/ 切源码）'
       : '源码模式 · Ctrl+/ 查看预览';
   }
 
   function setMode(m) {
     if (m === state.mode) return;
-    state.mode = m;
     if (m === 'source') {
+      // 源码是唯一事实来源：直接使用 state.lines，不做 DOM 回读
+      $('src-editor').value = state.lines.join('\n');
       $('src-editor').classList.remove('hidden');
       $('wysiwyg').classList.add('hidden');
     } else {
-      renderPreview();
+      state.lines = $('src-editor').value ? $('src-editor').value.split('\n') : [];
+      renderDocument();
       $('wysiwyg').classList.remove('hidden');
       $('src-editor').classList.add('hidden');
     }
+    state.mode = m;
     try { localStorage.setItem('onlinenote-mode', m); } catch (e) {}
     updateModeBtn();
     updateModeHint();
   }
 
-  // 渲染预览（纯渲染效果，只读）
-  function renderPreview() {
+  /* ================= 所见即所得编辑器核心 ================= */
+
+  function walkNodes(root, fn) {
+    var stack = [root];
+    while (stack.length) {
+      var n = stack.shift();
+      if (fn(n)) return true;
+      if (n.childNodes && n.childNodes.length) {
+        stack = Array.prototype.slice.call(n.childNodes).concat(stack);
+      }
+    }
+    return false;
+  }
+
+  // 渲染文档（源码 → 可编辑的富文本块）
+  function renderDocument() {
     var box = $('wysiwyg');
-    var text = $('src-editor').value;
-    if (text.trim() === '') {
-      box.innerHTML = '<p class="blk-empty">这里还没有内容，点击进入编辑…</p>';
+    state.blocks = docBlocks();
+    if (state.blocks.length === 0) {
+      state.blocks = [{ kind: 'para', start: 0, end: 0 }];
+    }
+    state.maps = [];
+    box.innerHTML = '';
+    state.blocks.forEach(function (b, i) {
+      var srcLines = state.lines.slice(b.start, b.end);
+      var r = b.kind === 'hr'
+        ? MD.renderBlockMapped(srcLines, 'hr', '')
+        : MD.renderBlockMapped(srcLines, b.kind, b.lang || '');
+      state.maps.push({ srcAtDom: r.srcAtDom, domAtSrc: r.domAtSrc, srcLen: srcLines.join('\n').length });
+      var holder = document.createElement('div');
+      holder.innerHTML = r.html;
+      var el = holder.firstChild || document.createElement('p');
+      el.className = 'md-blk';
+      el.dataset.i = i;
+      if (b.kind !== 'hr') el.setAttribute('contenteditable', 'true');
+      el.setAttribute('spellcheck', 'false');
+      if (b.kind === 'para' && srcLines.join('').trim() === '') {
+        el.innerHTML = '<br>'; // 空段落占位，保证可点击输入
+      }
+      box.appendChild(el);
+    });
+  }
+
+  // 序列化（DOM → 源行）
+  function serializeDocument() {
+    var box = $('wysiwyg');
+    var out = [];
+    for (var k = 0; k < state.blocks.length; k++) {
+      var el = box.children[k];
+      if (!el) break;
+      var bl = serializeBlock(state.blocks[k], el);
+      for (var j = 0; j < bl.length; j++) out.push(bl[j]);
+      if (k < state.blocks.length - 1) out.push('');
+    }
+    state.lines = out;
+  }
+
+  function walkText(el) {
+    var s = '';
+    walkNodes(el, function (n) {
+      if (n === el) return false;
+      if (n.nodeType === 3) { s += n.textContent; return false; }
+      if (n.nodeName === 'BR') { s += '\n'; return false; }
+      return false;
+    });
+    return s;
+  }
+
+  function serializeBlock(b, el) {
+    switch (b.kind) {
+      case 'para': {
+        // 占位 <br>（空段落）不算内容
+        if (el.children.length === 1 && el.children[0].nodeName === 'BR') return [''];
+        var t = walkText(el);
+        if (t === '') return [''];
+        return t.split('\n');
+      }
+      case 'heading': {
+        var m = (state.lines[b.start] || '').match(/^(#{1,6})/) || ['#'];
+        return [m[1] + ' ' + walkText(el)];
+      }
+      case 'ul':
+      case 'ol': {
+        var lis = el.querySelectorAll('li');
+        var out = [];
+        for (var i = 0; i < lis.length; i++) {
+          out.push((b.kind === 'ul' ? '- ' : (i + 1) + '. ') + walkText(lis[i]));
+        }
+        return out;
+      }
+      case 'quote': {
+        var t3 = walkText(el).split('\n');
+        return t3.map(function (l) { return '> ' + l; });
+      }
+      case 'code': {
+        return ['```' + (b.lang || '')].concat(el.textContent.split('\n')).concat(['```']);
+      }
+      case 'hr':
+      default:
+        return ['---'];
+    }
+  }
+
+  // 光标：DOM 选区 → 块索引 + 块内 DOM 文本偏移
+  function getCaretBlockAndDom() {
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount) return null;
+    var node = sel.anchorNode;
+    var off = sel.anchorOffset;
+    if (!node) return null;
+    var blkEl = node.nodeType === 1 ? closestBlock(node) : closestBlock(node.parentNode);
+    if (!blkEl) return null;
+    var domOff = 0;
+    walkNodes(blkEl, function (n) {
+      if (n === node) {
+        if (n.nodeType === 3) domOff += off;
+        return true;
+      }
+      if (n.nodeType === 3) { domOff += n.textContent.length; return false; }
+      return false;
+    });
+    return { i: parseInt(blkEl.dataset.i, 10), domOff: domOff };
+  }
+
+  function closestBlock(node) {
+    var n = node;
+    while (n) {
+      if (n.className && String(n.className).indexOf('md-blk') >= 0) return n;
+      n = n.parentNode;
+    }
+    return null;
+  }
+
+  // 文档块解析（空文档兜底为一个空段落块，与渲染层一致）
+  function docBlocks() {
+    return docBlocksOf(state.lines);
+  }
+  function docBlocksOf(lines) {
+    var blocks = MD.splitBlocks(lines);
+    if (blocks.length === 0) blocks = [{ kind: 'para', start: 0, end: 0 }];
+    return blocks;
+  }
+
+  // 源码偏移 ⇄ DOM 偏移
+  function srcOffAt(i, domOff) {
+    var map = state.maps[i];
+    if (!map) return 0;
+    var arr = map.srcAtDom;
+    if (domOff >= arr.length - 1) return map.srcLen; // 块尾 → 源码末尾（含后置标记）
+    if (domOff <= 0) return 0;
+    return arr[domOff];
+  }
+
+  function domOffAt(i, srcOff) {
+    var map = state.maps[i];
+    if (!map) return 0;
+    var arr = map.domAtSrc;
+    if (srcOff < 0) srcOff = 0;
+    if (srcOff >= arr.length) srcOff = arr.length - 1;
+    return arr[srcOff];
+  }
+
+  // 把光标放到第 i 块的源码偏移 srcOff 处
+  function placeCaret(i, srcOff) {
+    var box = $('wysiwyg');
+    if (i < 0) i = 0;
+    if (i >= box.children.length) i = box.children.length - 1;
+    var blkEl = box.children[i];
+    if (!blkEl) return;
+    var domOff = domOffAt(i, srcOff);
+    blkEl.focus();
+    var sel = window.getSelection();
+    if (!sel) return;
+    sel.removeAllRanges();
+    var range = document.createRange();
+    // 列表空项：边界恰在空 li 处时，光标放入该 li（保证输入进入正确列表项）
+    if (blkEl.tagName === 'UL' || blkEl.tagName === 'OL') {
+      var lis = blkEl.querySelectorAll('li');
+      var pos = 0;
+      for (var t = 0; t < lis.length; t++) {
+        if (lis[t].textContent === '' && domOff === pos) {
+          range.setStart(lis[t], 0);
+          range.collapse(true);
+          sel.addRange(range);
+          return;
+        }
+        pos += lis[t].textContent.length;
+      }
+    }
+    var placed = false;
+    walkNodes(blkEl, function (n) {
+      if (n.nodeType === 3) {
+        if (domOff <= n.textContent.length) {
+          range.setStart(n, domOff);
+          placed = true;
+          return true;
+        }
+        domOff -= n.textContent.length;
+        return false;
+      }
+      return false;
+    });
+    if (!placed) {
+      range.selectNodeContents(blkEl);
+      range.collapse(false);
     } else {
-      box.innerHTML = MD.renderMarkdown(text);
+      range.collapse(true);
     }
+    sel.addRange(range);
   }
 
-  // 预览中点击 → 切到源码，并把光标定位到点击位置对应的行
-  function jumpToSource(e) {
-    var ta = $('src-editor');
-    var box = $('wysiwyg');
-    var rect = box.getBoundingClientRect();
-    var y = (e && e.clientY !== undefined ? e.clientY : 0) - rect.top + box.scrollTop;
-    var lineIdx = Math.max(0, Math.floor(y / 27)); // 近似渲染行高
-    setMode('source');
-    var lines = ta.value.split('\n');
-    if (lineIdx >= lines.length) lineIdx = Math.max(0, lines.length - 1);
-    var pos = 0;
-    for (var k = 0; k < lineIdx; k++) pos += lines[k].length + 1;
-    ta.focus();
-    ta.setSelectionRange(pos, pos);
-    ta.scrollTop = Math.max(0, lineIdx * 24 - ta.clientHeight / 2);
+  // 输入后（兜底路径）：序列化 → 重渲染 → 用新映射把"视觉位置"换算为源码偏移并恢复光标
+  function handleInput() {
+    var pos = getCaretBlockAndDom(); // 旧 DOM 中的 (块索引, 块内视觉偏移)
+    var i = pos ? pos.i : 0;
+    var domOff = pos ? pos.domOff : 0;
+    serializeDocument();
+    pushUndo(i, domOff);
+    renderDocument();
+    if (i < 0) i = 0;
+    if (i >= state.blocks.length) i = state.blocks.length - 1;
+    var newMap = state.maps[i];
+    var srcOff = newMap ? newMap.srcAtDom[Math.min(domOff, newMap.srcAtDom.length - 1)] : 0;
+    placeCaret(i, srcOff);
+    markDirty();
   }
 
-  function markDirty() {
-    if (!state.dirty) {
-      state.dirty = true;
-      updateSaveStatus();
+  // 源码级操作（Enter/Backspace/Delete/粘贴）后应用结果并定位光标
+  function applyOpResult(res) {
+    state.lines = res.lines;
+    renderDocument();
+    var blocks = state.blocks;
+    var bi = -1;
+    for (var k = 0; k < blocks.length; k++) {
+      if (blocks[k].start <= res.caret.line && res.caret.line < blocks[k].end) { bi = k; break; }
     }
+    if (bi < 0) bi = Math.max(0, blocks.length - 1);
+    var b = blocks[bi];
+    var srcOffInBlock = 0;
+    var rawLines = state.lines.slice(b.start, b.end);
+    var lineOffset = res.caret.line - b.start;
+    for (var j = 0; j < lineOffset && j < rawLines.length; j++) srcOffInBlock += rawLines[j].length + 1;
+    var targetLine = rawLines[lineOffset] || '';
+    var mm = targetLine.match(/^\s*([-*+]|\d+\.|>)\s+/);
+    if (mm && res.caret.off === 0) srcOffInBlock += mm[0].length; // 行首光标落在标记之后
+    srcOffInBlock += res.caret.off;
+    placeCaret(bi, srcOffInBlock);
+    markDirty();
+  }
+
+  function pushUndo(i, off) {
+    var text = state.lines.join('\n');
+    var last = state.undoStack[state.undoStack.length - 1];
+    if (last && last.text === text) return;
+    state.undoStack.push({ text: text, i: i || 0, off: off || 0 });
+    if (state.undoStack.length > 100) state.undoStack.shift();
+  }
+
+  function undo() {
+    var item = state.undoStack.pop();
+    if (!item) return;
+    // 若栈顶与当前相同，再弹一次
+    if (state.lines.join('\n') === item.text && state.undoStack.length) {
+      item = state.undoStack.pop();
+      if (!item) return;
+    }
+    state.lines = item.text ? item.text.split('\n') : [];
+    renderDocument();
+    placeCaret(Math.min(item.i, state.blocks.length - 1), item.off);
+    markDirty();
+  }
+
+  function currentText() {
+    if (state.mode === 'source') return $('src-editor').value;
+    return state.lines.join('\n');
   }
 
   /* ---------- 认证 ---------- */
@@ -285,16 +539,18 @@
       state.currentPath = path;
       state.currentName = name || path;
       $('current-file').textContent = path;
+      state.lines = (data.content || '') ? data.content.split('\n') : [];
+      state.undoStack = [];
       $('src-editor').value = data.content || '';
       state.dirty = false;
       updateSaveStatus();
-      if (state.mode === 'preview') renderPreview();
+      if (state.mode === 'preview') renderDocument();
     }).catch(function (err) { toast(err.message); });
   }
 
   function save() {
     if (!state.currentPath) { toast('请先选择一篇笔记'); return; }
-    api('/file', { method: 'PUT', body: { path: state.currentPath, content: $('src-editor').value } })
+    api('/file', { method: 'PUT', body: { path: state.currentPath, content: currentText() } })
       .then(function () {
         state.dirty = false;
         updateSaveStatus();
@@ -360,8 +616,10 @@
       .then(function () {
         if (state.currentPath === n.path) {
           state.currentPath = null;
+          state.lines = [];
+          state.undoStack = [];
           $('src-editor').value = '';
-          renderPreview();
+          renderDocument();
           $('current-file').textContent = '未选择笔记';
           state.dirty = false;
           updateSaveStatus();
@@ -441,12 +699,111 @@
       setMode(state.mode === 'preview' ? 'source' : 'preview');
     });
 
-    // 源码编辑器：输入即脏标记
+    // 源码编辑器
     $('src-editor').addEventListener('input', markDirty);
 
-    // 预览：点击 → 跳回源码对应位置
-    $('wysiwyg').addEventListener('click', function (e) {
-      jumpToSource(e);
+    // ===== 所见即所得编辑器 =====
+    var box = $('wysiwyg');
+
+    box.addEventListener('input', function () {
+      if (state.composing) return;
+      handleInput(); // 兜底路径（不支持 beforeinput 的浏览器）
+    });
+
+    box.addEventListener('compositionstart', function () {
+      state.composing = true;
+      var pos = getCaretBlockAndDom();
+      state.compStart = pos ? { i: pos.i, off: srcOffAt(pos.i, pos.domOff) } : null;
+      state.compLines = state.lines.slice();
+    });
+    box.addEventListener('compositionend', function (e) {
+      state.composing = false;
+      var data = (e && e.data) || '';
+      if (state.compStart && data) {
+        // 以组合开始前的源码为基准插入最终文本（避免 DOM 回读丢失标记）
+        var blocks = docBlocksOf(state.compLines);
+        var res = EditorOps.insertTextOp(state.compLines, blocks, state.compStart.i, state.compStart.off, data);
+        state.compStart = null;
+        state.compLines = null;
+        pushUndo(0, 0);
+        applyOpResult(res);
+      } else {
+        handleInput();
+      }
+    });
+
+    // 核心：在浏览器改动 DOM 之前拦截输入，直接映射回源码（源码是唯一事实来源，
+    // 渲染 DOM 只是投影，从不回读），从根本上避免隐藏标记（#、**、- 等）丢失
+    box.addEventListener('beforeinput', function (e) {
+      if (state.composing || e.isComposing) return;
+      var it = e.inputType;
+      if (it === 'insertCompositionText' || it === 'insertFromPaste' || it === 'insertFromDrop') return;
+      var pos = getCaretBlockAndDom();
+      if (!pos) return;
+      var srcOff = srcOffAt(pos.i, pos.domOff);
+      var data = (e.data != null) ? e.data : '';
+      var res = null;
+      if (it === 'insertText' || it === 'insertLineBreak' || it === 'insertParagraph') {
+        e.preventDefault();
+        var blocks = docBlocks();
+        res = EditorOps.insertTextOp(state.lines, blocks, pos.i, srcOff, data === '' ? '\n' : data);
+      } else if (it === 'deleteContentBackward' || it === 'deleteWordBackward') {
+        e.preventDefault();
+        var blocks2 = docBlocks();
+        res = EditorOps.backspaceOp(state.lines, blocks2, pos.i, srcOff);
+      } else if (it === 'deleteContentForward' || it === 'deleteWordForward') {
+        e.preventDefault();
+        var blocks3 = docBlocks();
+        res = EditorOps.deleteOp(state.lines, blocks3, pos.i, srcOff);
+      } else {
+        return;
+      }
+      pushUndo(pos.i, srcOff);
+      applyOpResult(res);
+    });
+
+    box.addEventListener('keydown', function (e) {
+      if (state.composing || e.isComposing) return;
+      var pos = getCaretBlockAndDom();
+      if (!pos) return;
+      var srcOff = srcOffAt(pos.i, pos.domOff);
+      var blockSrcLen = state.lines.slice(state.blocks[pos.i].start, state.blocks[pos.i].end).join('\n').length;
+
+      // 源码是唯一事实来源：直接基于 state.lines 操作，不做 DOM 回读
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        var blocks = docBlocks();
+        var res = EditorOps.enterOp(state.lines, blocks, pos.i, srcOff);
+        pushUndo(pos.i, srcOff);
+        applyOpResult(res);
+      } else if (e.key === 'Backspace' && srcOff === 0) {
+        e.preventDefault();
+        var blocks2 = docBlocks();
+        var res2 = EditorOps.backspaceOp(state.lines, blocks2, pos.i, 0);
+        pushUndo(pos.i, 0);
+        applyOpResult(res2);
+      } else if (e.key === 'Delete' && srcOff >= blockSrcLen) {
+        e.preventDefault();
+        var blocks3 = docBlocks();
+        var res3 = EditorOps.deleteOp(state.lines, blocks3, pos.i, blockSrcLen);
+        pushUndo(pos.i, blockSrcLen);
+        applyOpResult(res3);
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+    });
+
+    box.addEventListener('paste', function (e) {
+      e.preventDefault();
+      var text = (e.clipboardData || window.clipboardData).getData('text/plain');
+      var pos = getCaretBlockAndDom();
+      if (!pos || !text) return;
+      var srcOff = srcOffAt(pos.i, pos.domOff);
+      var blocks = docBlocks();
+      var res = EditorOps.insertTextOp(state.lines, blocks, pos.i, srcOff, text);
+      pushUndo(pos.i, srcOff);
+      applyOpResult(res);
     });
 
     // 快捷键
@@ -462,6 +819,13 @@
     document.addEventListener('click', hideCtxMenu);
   }
 
+  function markDirty() {
+    if (!state.dirty) {
+      state.dirty = true;
+      updateSaveStatus();
+    }
+  }
+
   function init() {
     try {
       if (localStorage.getItem('onlinenote-mode') === 'source') state.mode = 'source';
@@ -469,6 +833,8 @@
     if (state.mode === 'source') {
       $('src-editor').classList.remove('hidden');
       $('wysiwyg').classList.add('hidden');
+    } else {
+      renderDocument();
     }
     updateThemeBtn();
     updateModeBtn();
