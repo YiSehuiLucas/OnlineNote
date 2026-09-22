@@ -108,6 +108,22 @@ func (s *Store) GetUserByName(username string) (*model.User, error) {
 	return u, nil
 }
 
+// DeleteUserByUsername 按用户名删除用户。
+func (s *Store) DeleteUserByUsername(username string) error {
+	res, err := s.db.Exec(`DELETE FROM users WHERE username = ?`, username)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListUsers 列出全部用户。
 func (s *Store) ListUsers() ([]model.User, error) {
 	rows, err := s.db.Query(`SELECT id, username, password_hash, created_at FROM users ORDER BY id`)

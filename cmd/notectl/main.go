@@ -107,6 +107,28 @@ func handleUser(st *store.Store, args []string) {
 			log.Fatalf("创建用户失败: %v", err)
 		}
 		fmt.Printf("用户创建成功: %s (ID %d)\n", user.Username, user.ID)
+	case "del":
+		username := ""
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == "-username" || rest[i] == "--username" {
+				if i+1 < len(rest) {
+					username = strings.TrimSpace(rest[i+1])
+					i++
+				}
+			}
+		}
+		if username == "" {
+			fmt.Print("用户名: ")
+			username = strings.TrimSpace(readLine())
+		}
+		if username == "" {
+			log.Fatal("请输入用户名")
+		}
+		if err := st.DeleteUserByUsername(username); err != nil {
+			log.Fatalf("删除失败: %v", err)
+		}
+		fmt.Printf("用户已删除: %s\n", username)
 	case "list":
 		n, err := st.CountUsers()
 		if err != nil {
@@ -138,5 +160,6 @@ func usage() {
 	fmt.Println(`用法:
   notectl -config configs/config.yaml db init
   notectl -config configs/config.yaml user add -username 用户名 -password 密码
+  notectl -config configs/config.yaml user del -username 用户名
   notectl -config configs/config.yaml user list`)
 }
