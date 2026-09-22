@@ -1,11 +1,11 @@
 /**
- * OnlineNote 前端逻辑（v1.5，零构建）
- * - Typora 式所见即所得：直接在预览（渲染效果）中书写，输入即实时渲染
- *   （输入 # 变标题、**文字** 变粗体、- 变列表……）
- * - 每次输入后整文档重渲染，并通过源码⇄DOM 位置映射精确恢复光标
- * - 中文输入法（IME）组合期间不重渲染，组合结束再渲染
- * - Ctrl+/ 切换源码模式（大文本框）；Ctrl+Z 撤销；Ctrl+S 保存
- * - SVG 图标目录树、夜间主题
+ * OnlineNote 前端逻辑（v2.0，零构建）
+ * 编辑器架构：**AST 为唯一事实来源**（参照 goldmark）——
+ *   语法标记不存在于模型中（标题=节点属性、加粗=strong 节点），
+ *   渲染与序列化均从 AST 生成，DOM 文本与 AST 文本一一对应。
+ * 普通打字零重渲染（光标完全交给浏览器原生行为）；
+ * 仅当格式结构变化（如 ** 闭合）或块类型转换时才重渲染并恢复光标（纯文本偏移）。
+ * Ctrl+/ 源码模式、Ctrl+Z 撤销、Ctrl+S 保存、夜间主题、SVG 目录树。
  */
 (function () {
   'use strict';
@@ -17,14 +17,10 @@
     selectedDir: '',
     dirty: false,
     username: '',
-    mode: 'preview',        // 'source' | 'preview'
-    lines: [],              // 文档源行（编辑模型）
-    blocks: [],             // 当前文档块（docBlocks() 解析）
-    maps: [],               // 每块的 srcAtDom / domAtSrc 映射
-    undoStack: [],          // [{text, caret:{i,off}}]
-    composing: false,
-    compStart: null,        // 输入法组合开始时的光标位置
-    compLines: null         // 输入法组合开始时的源行快照
+    mode: 'preview',
+    ast: { kind: 'document', blocks: [] },   // 文档 AST（唯一模型）
+    undoStack: [],                           // [{text, caret}]
+    composing: false
   };
 
   function $(id) { return document.getElementById(id); }
@@ -122,12 +118,16 @@
   function setMode(m) {
     if (m === state.mode) return;
     if (m === 'source') {
-      // 源码是唯一事实来源：直接使用 state.lines，不做 DOM 回读
-      $('src-editor').value = state.lines.join('\n');
+      $('src-editor').value = MD.serialize(state.ast);
       $('src-editor').classList.remove('hidden');
       $('wysiwyg').classList.add('hidden');
     } else {
-      state.lines = $('src-editor').value ? $('src-editor').value.split('\n') : [];
+      // 源码未改动则保留原 AST（避免空段落等信息在往返解析中丢失）；
+      // 只有用户手动编辑过源码才重新解析
+      var val = $('src-editor').value;
+      if (val !== MD.serialize(state.ast)) {
+        state.ast = MD.parse(val);
+      }
       renderDocument();
       $('wysiwyg').classList.remove('hidden');
       $('src-editor').classList.add('hidden');
@@ -138,148 +138,39 @@
     updateModeHint();
   }
 
-  /* ================= 所见即所得编辑器核心 ================= */
+  /* ================= AST 编辑器核心 ================= */
 
-  function walkNodes(root, fn) {
-    var stack = [root];
-    while (stack.length) {
-      var n = stack.shift();
-      if (fn(n)) return true;
-      if (n.childNodes && n.childNodes.length) {
-        stack = Array.prototype.slice.call(n.childNodes).concat(stack);
-      }
-    }
-    return false;
-  }
-
-  // 渲染文档（源码 → 可编辑的富文本块）
   function renderDocument() {
     var box = $('wysiwyg');
-    state.blocks = docBlocks();
-    if (state.blocks.length === 0) {
-      state.blocks = [{ kind: 'para', start: 0, end: 0 }];
+    if (state.ast.blocks.length === 0) {
+      state.ast.blocks.push({ kind: 'paragraph', children: [] });
     }
-    state.maps = [];
     box.innerHTML = '';
-    state.blocks.forEach(function (b, i) {
-      var srcLines = state.lines.slice(b.start, b.end);
-      var r = b.kind === 'hr'
-        ? MD.renderBlockMapped(srcLines, 'hr', '')
-        : MD.renderBlockMapped(srcLines, b.kind, b.lang || '');
-      state.maps.push({ srcAtDom: r.srcAtDom, domAtSrc: r.domAtSrc, srcLen: srcLines.join('\n').length });
+    state.ast.blocks.forEach(function (b, i) {
       var holder = document.createElement('div');
-      holder.innerHTML = r.html;
+      holder.innerHTML = MD.renderBlockHTML(b);
       var el = holder.firstChild || document.createElement('p');
       el.className = 'md-blk';
       el.dataset.i = i;
       if (b.kind !== 'hr') el.setAttribute('contenteditable', 'true');
       el.setAttribute('spellcheck', 'false');
-      if (b.kind === 'para' && srcLines.join('').trim() === '') {
-        el.innerHTML = '<br>'; // 空段落占位，保证可点击输入
-      }
       box.appendChild(el);
     });
   }
 
-  // 序列化（DOM → 源行）
-  function serializeDocument() {
-    var box = $('wysiwyg');
-    var out = [];
-    for (var k = 0; k < state.blocks.length; k++) {
-      var el = box.children[k];
-      if (!el) break;
-      var bl = serializeBlock(state.blocks[k], el);
-      for (var j = 0; j < bl.length; j++) out.push(bl[j]);
-      if (k < state.blocks.length - 1) out.push('');
-    }
-    state.lines = out;
-  }
-
-  function walkText(el) {
-    var s = '';
-    walkNodes(el, function (n) {
-      if (n === el) return false;
-      if (n.nodeType === 3) { s += n.textContent; return false; }
-      if (n.nodeName === 'BR') { s += '\n'; return false; }
-      return false;
-    });
-    return s;
-  }
-
-  function serializeBlock(b, el) {
+  // 块元素的内部 HTML（原位更新用）
+  function blockInnerHTML(b) {
     switch (b.kind) {
-      case 'para': {
-        // 占位 <br>（空段落）不算内容
-        if (el.children.length === 1 && el.children[0].nodeName === 'BR') return [''];
-        var t = walkText(el);
-        if (t === '') return [''];
-        return t.split('\n');
-      }
-      case 'heading': {
-        var m = (state.lines[b.start] || '').match(/^(#{1,6})/) || ['#'];
-        return [m[1] + ' ' + walkText(el)];
-      }
-      case 'ul':
-      case 'ol': {
-        var lis = el.querySelectorAll('li');
-        var out = [];
-        for (var i = 0; i < lis.length; i++) {
-          out.push((b.kind === 'ul' ? '- ' : (i + 1) + '. ') + walkText(lis[i]));
-        }
-        return out;
-      }
-      case 'quote': {
-        var t3 = walkText(el).split('\n');
-        return t3.map(function (l) { return '> ' + l; });
-      }
-      case 'code': {
-        return ['```' + (b.lang || '')].concat(el.textContent.split('\n')).concat(['```']);
-      }
-      case 'hr':
-      default:
-        return ['---'];
+      case 'heading': return MD.renderInlines(b.children);
+      case 'paragraph': return MD.renderInlines(b.children) || '<br>';
+      case 'quote': return MD.renderInlines(b.children);
+      case 'code': return '<code>' + MD.renderInlines([{ kind: 'text', lit: b.text }]) + '</code>';
+      case 'list':
+        return b.items.map(function (it) {
+          return '<li>' + (MD.renderInlines(it.children) || '<br>') + '</li>';
+        }).join('');
+      default: return '';
     }
-  }
-
-  // 计算节点子树内的纯文本长度（<br> 不计入）
-  function textLenOf(node) {
-    if (node.nodeType === 3) return node.textContent.length;
-    var len = 0;
-    walkNodes(node, function (n) {
-      if (n === node) return false;
-      if (n.nodeType === 3) { len += n.textContent.length; return false; }
-      return false;
-    });
-    return len;
-  }
-
-  // 光标：DOM 选区 → 块索引 + 块内 DOM 文本偏移
-  function getCaretBlockAndDom() {
-    var sel = window.getSelection ? window.getSelection() : null;
-    if (!sel || !sel.rangeCount) return null;
-    var node = sel.anchorNode;
-    var off = sel.anchorOffset;
-    if (!node) return null;
-    var blkEl = node.nodeType === 1 ? closestBlock(node) : closestBlock(node.parentNode);
-    if (!blkEl) return null;
-    var domOff = 0;
-    walkNodes(blkEl, function (n) {
-      if (n === node) {
-        if (n.nodeType === 3) {
-          domOff += off;
-        } else {
-          // 元素锚点（浏览器在段落末尾常见）：offset = 子节点序号，
-          // 统计其之前所有子节点的文本长度
-          for (var ci = 0; ci < off && ci < n.childNodes.length; ci++) {
-            domOff += textLenOf(n.childNodes[ci]);
-          }
-        }
-        return true;
-      }
-      if (n.nodeType === 3) { domOff += n.textContent.length; return false; }
-      return false;
-    });
-    return { i: parseInt(blkEl.dataset.i, 10), domOff: domOff };
   }
 
   function closestBlock(node) {
@@ -291,77 +182,83 @@
     return null;
   }
 
-  // 文档块解析（空文档兜底为一个空段落块，与渲染层一致）
-  function docBlocks() {
-    return docBlocksOf(state.lines);
-  }
-  function docBlocksOf(lines) {
-    var blocks = MD.splitBlocks(lines);
-    if (blocks.length === 0) blocks = [{ kind: 'para', start: 0, end: 0 }];
-    return blocks;
-  }
-
-  // 源码偏移 ⇄ DOM 偏移
-  function srcOffAt(i, domOff) {
-    var map = state.maps[i];
-    if (!map) return 0;
-    var arr = map.srcAtDom;
-    if (domOff >= arr.length - 1) return map.srcLen; // 块尾 → 源码末尾（含后置标记）
-    if (domOff <= 0) return 0;
-    return arr[domOff];
+  // 子树纯文本长度（<br> 记 0）
+  function subtreeTextLen(node) {
+    if (node.nodeType === 3) return node.textContent.length;
+    var len = 0;
+    for (var i = 0; i < node.childNodes.length; i++) {
+      var c = node.childNodes[i];
+      if (c.nodeType === 3) len += c.textContent.length;
+      else if (c.tagName !== 'BR') len += subtreeTextLen(c);
+    }
+    return len;
   }
 
-  function domOffAt(i, srcOff) {
-    var map = state.maps[i];
-    if (!map) return 0;
-    var arr = map.domAtSrc;
-    if (srcOff < 0) srcOff = 0;
-    if (srcOff >= arr.length) srcOff = arr.length - 1;
-    return arr[srcOff];
+  // root 内 node/off 处 → DOM 文本偏移
+  function textOffsetIn(root, node, off) {
+    var pos = 0, found = false;
+    (function walk(el) {
+      for (var i = 0; i < el.childNodes.length && !found; i++) {
+        var c = el.childNodes[i];
+        if (c === node) {
+          if (c.nodeType === 3) pos += off;
+          else {
+            for (var j = 0; j < off && j < c.childNodes.length; j++) pos += subtreeTextLen(c.childNodes[j]);
+          }
+          found = true;
+          return;
+        }
+        if (c.nodeType === 3) pos += c.textContent.length;
+        else walk(c);
+      }
+    })(root);
+    return pos;
   }
 
-  // 把光标放到第 i 块的源码偏移 srcOff 处
-  function placeCaret(i, srcOff) {
-    var box = $('wysiwyg');
-    if (i < 0) i = 0;
-    if (i >= box.children.length) i = box.children.length - 1;
-    var blkEl = box.children[i];
-    if (!blkEl) return;
-    var domOff = domOffAt(i, srcOff);
-    blkEl.focus();
+  // 当前选区 → { idx, itemIdx?, off }
+  function getCaret() {
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount) return null;
+    var node = sel.anchorNode;
+    var off = sel.anchorOffset;
+    if (!node) return null;
+    var blkEl = closestBlock(node.nodeType === 1 ? node : node.parentNode);
+    if (!blkEl) return null;
+    var idx = parseInt(blkEl.dataset.i, 10);
+    if (blkEl.tagName === 'UL' || blkEl.tagName === 'OL') {
+      var li = node.nodeType === 1 ? node : node.parentNode;
+      while (li && li.tagName !== 'LI') li = li.parentNode;
+      var lis = blkEl.querySelectorAll('li');
+      var itemIdx = -1;
+      for (var k = 0; k < lis.length; k++) {
+        if (lis[k] === li) { itemIdx = k; break; }
+      }
+      if (itemIdx < 0) itemIdx = 0;
+      return { idx: idx, itemIdx: itemIdx, off: textOffsetIn(li || blkEl, node, off) };
+    }
+    return { idx: idx, off: textOffsetIn(blkEl, node, off) };
+  }
+
+  // 在 root 内偏移 off 处放置光标（真实 Range/Selection）
+  function placeCaretIn(root, off) {
+    var range = document.createRange();
     var sel = window.getSelection();
     if (!sel) return;
     sel.removeAllRanges();
-    var range = document.createRange();
-    // 列表空项：边界恰在空 li 处时，光标放入该 li（保证输入进入正确列表项）
-    if (blkEl.tagName === 'UL' || blkEl.tagName === 'OL') {
-      var lis = blkEl.querySelectorAll('li');
-      var pos = 0;
-      for (var t = 0; t < lis.length; t++) {
-        if (lis[t].textContent === '' && domOff === pos) {
-          range.setStart(lis[t], 0);
-          range.collapse(true);
-          sel.addRange(range);
-          return;
-        }
-        pos += lis[t].textContent.length;
-      }
-    }
     var placed = false;
-    walkNodes(blkEl, function (n) {
-      if (n.nodeType === 3) {
-        if (domOff <= n.textContent.length) {
-          range.setStart(n, domOff);
-          placed = true;
-          return true;
+    (function walk(el) {
+      for (var i = 0; i < el.childNodes.length && !placed; i++) {
+        var c = el.childNodes[i];
+        if (c.nodeType === 3) {
+          if (off <= c.textContent.length) { range.setStart(c, off); placed = true; return; }
+          off -= c.textContent.length;
+        } else if (c.tagName !== 'BR') {
+          walk(c);
         }
-        domOff -= n.textContent.length;
-        return false;
       }
-      return false;
-    });
+    })(root);
     if (!placed) {
-      range.selectNodeContents(blkEl);
+      range.selectNodeContents(root);
       range.collapse(false);
     } else {
       range.collapse(true);
@@ -369,70 +266,146 @@
     sel.addRange(range);
   }
 
-  // 输入后（兜底路径）：序列化 → 重渲染 → 用新映射把"视觉位置"换算为源码偏移并恢复光标
-  function handleInput() {
-    var pos = getCaretBlockAndDom(); // 旧 DOM 中的 (块索引, 块内视觉偏移)
-    var i = pos ? pos.i : 0;
-    var domOff = pos ? pos.domOff : 0;
-    serializeDocument();
-    pushUndo(i, domOff);
-    renderDocument();
-    if (i < 0) i = 0;
-    if (i >= state.blocks.length) i = state.blocks.length - 1;
-    var newMap = state.maps[i];
-    var srcOff = newMap ? newMap.srcAtDom[Math.min(domOff, newMap.srcAtDom.length - 1)] : 0;
-    placeCaret(i, srcOff);
-    markDirty();
-  }
-
-  // 源码级操作（Enter/Backspace/Delete/粘贴）后应用结果并定位光标
-  function applyOpResult(res) {
-    state.lines = res.lines;
-    renderDocument();
-    var blocks = state.blocks;
-    var bi = -1;
-    for (var k = 0; k < blocks.length; k++) {
-      if (blocks[k].start <= res.caret.line && res.caret.line < blocks[k].end) { bi = k; break; }
+  function placeCaretFrom(caret) {
+    var box = $('wysiwyg');
+    var blkEl = box.children[caret.idx];
+    if (!blkEl) return;
+    blkEl.focus();
+    if (caret.itemIdx >= 0) {
+      var lis = blkEl.querySelectorAll('li');
+      var li = lis[caret.itemIdx];
+      if (li) placeCaretIn(li, caret.off);
+      else placeCaretIn(blkEl, 0);
+    } else {
+      placeCaretIn(blkEl, caret.off);
     }
-    if (bi < 0) bi = Math.max(0, blocks.length - 1);
-    var b = blocks[bi];
-    var srcOffInBlock = 0;
-    var rawLines = state.lines.slice(b.start, b.end);
-    var lineOffset = res.caret.line - b.start;
-    for (var j = 0; j < lineOffset && j < rawLines.length; j++) srcOffInBlock += rawLines[j].length + 1;
-    var targetLine = rawLines[lineOffset] || '';
-    var mm = targetLine.match(/^\s*([-*+]|\d+\.|>)\s+/);
-    if (mm && res.caret.off === 0) srcOffInBlock += mm[0].length; // 行首光标落在标记之后
-    srcOffInBlock += res.caret.off;
-    placeCaret(bi, srcOffInBlock);
+  }
+
+  function blockTextLen(b, itemIdx) {
+    if (b.kind === 'code') return b.text.length;
+    if (b.kind === 'list') {
+      var it = b.items[itemIdx >= 0 ? itemIdx : b.items.length - 1];
+      return it ? MD.inlineTextLen(it.children) : 0;
+    }
+    return MD.inlineTextLen(b.children);
+  }
+
+  // DOM → 块级 AST 节点（往返重解析：让 ** 等标记重新形成行内结构）
+  function blockFromDOM(el, old) {
+    function inlines(el2) {
+      return MD.parseInlines(MD.serializeInlines(MD.inlinesFromDOM(el2)));
+    }
+    switch (old.kind) {
+      case 'heading': return { kind: 'heading', level: old.level, children: inlines(el) };
+      case 'paragraph': return { kind: 'paragraph', children: inlines(el) };
+      case 'quote': return { kind: 'quote', children: inlines(el) };
+      case 'code': return { kind: 'code', lang: old.lang, text: el.textContent };
+      case 'list': {
+        var lis = el.querySelectorAll('li');
+        var items = [];
+        for (var k = 0; k < lis.length; k++) {
+          items.push({ kind: 'listitem', children: inlines(lis[k]) });
+        }
+        return { kind: 'list', ordered: old.ordered, items: items };
+      }
+      default: return old;
+    }
+  }
+
+  function markDirty() {
+    if (!state.dirty) {
+      state.dirty = true;
+      updateSaveStatus();
+    }
+  }
+
+  // 行内结构签名（仅元素种类序列，与内容长度无关）
+  function structureSig(b) {
+    if (b.kind === 'code') return 'code';
+    if (b.kind === 'list') return b.items.map(function (it) { return structureSigList(it.children); }).join('|');
+    return structureSigList(b.children);
+  }
+  function structureSigList(nodes) {
+    return nodes.map(function (n) { return n.kind; }).join(',');
+  }
+
+  // 输入后：重建当前块 → 更新 AST → 按需重渲染/恢复光标
+  function handleInput() {
+    var pos = getCaret();
+    if (!pos) return;
+    var idx = pos.idx;
+    var old = state.ast.blocks[idx];
+    if (!old) return;
+    var blkEl = $('wysiwyg').children[idx];
+    if (!blkEl) return;
+    var newBlock = blockFromDOM(blkEl, old);
+
+    var countBefore = state.ast.blocks.length;
+    state.ast.blocks[idx] = newBlock;
+    var normalized = EditorOps.normalizeBlock(state.ast.blocks, idx);
+    pushUndo(pos);
+
+    if (state.ast.blocks.length === countBefore && !normalized) {
+      if (structureSig(state.ast.blocks[idx]) === structureSig(old)) {
+        // 行内结构未变：无需重渲染，光标保持浏览器原生位置
+        markDirty();
+        return;
+      }
+      // 行内结构变化（如 ** 闭合）：原位更新该块 + 按文本偏移恢复光标
+      blkEl.innerHTML = blockInnerHTML(state.ast.blocks[idx]);
+      if (pos.itemIdx >= 0) {
+        var lis2 = blkEl.querySelectorAll('li');
+        var li2 = lis2[pos.itemIdx];
+        if (li2) placeCaretIn(li2, pos.off);
+        else placeCaretIn(blkEl, 0);
+      } else {
+        placeCaretIn(blkEl, pos.off);
+      }
+      blkEl.focus();
+    } else {
+      // 结构变化（类型转换/列表合并）：整文档重渲染，光标落在受影响块末尾
+      renderDocument();
+      var ni = state.ast.blocks.indexOf(newBlock);
+      if (ni < 0) ni = Math.min(idx, state.ast.blocks.length - 1);
+      if (ni >= 0) {
+        var b = state.ast.blocks[ni];
+        var el2 = $('wysiwyg').children[ni];
+        placeCaretIn(el2, blockTextLen(b, -1));
+        el2.focus();
+      }
+    }
     markDirty();
   }
 
-  function pushUndo(i, off) {
-    var text = state.lines.join('\n');
+  // 结构操作（回车/退格/删除/粘贴）后应用并定位光标
+  function applyOpResult(res) {
+    state.ast.blocks = res.blocks;
+    renderDocument();
+    placeCaretFrom(res.caret);
+    markDirty();
+  }
+
+  function pushUndo(caret) {
+    var text = MD.serialize(state.ast);
     var last = state.undoStack[state.undoStack.length - 1];
     if (last && last.text === text) return;
-    state.undoStack.push({ text: text, i: i || 0, off: off || 0 });
+    state.undoStack.push({ text: text, caret: caret });
     if (state.undoStack.length > 100) state.undoStack.shift();
   }
 
   function undo() {
     var item = state.undoStack.pop();
     if (!item) return;
-    // 若栈顶与当前相同，再弹一次
-    if (state.lines.join('\n') === item.text && state.undoStack.length) {
+    if (MD.serialize(state.ast) === item.text && state.undoStack.length) {
       item = state.undoStack.pop();
       if (!item) return;
     }
-    state.lines = item.text ? item.text.split('\n') : [];
+    state.ast = MD.parse(item.text);
     renderDocument();
-    placeCaret(Math.min(item.i, state.blocks.length - 1), item.off);
+    var caret = item.caret || { idx: 0, off: 0 };
+    if (caret.idx >= state.ast.blocks.length) caret = { idx: state.ast.blocks.length - 1, off: 0 };
+    if (caret.idx >= 0) placeCaretFrom(caret);
     markDirty();
-  }
-
-  function currentText() {
-    if (state.mode === 'source') return $('src-editor').value;
-    return state.lines.join('\n');
   }
 
   /* ---------- 认证 ---------- */
@@ -559,7 +532,7 @@
       state.currentPath = path;
       state.currentName = name || path;
       $('current-file').textContent = path;
-      state.lines = (data.content || '') ? data.content.split('\n') : [];
+      state.ast = MD.parse(data.content || '');
       state.undoStack = [];
       $('src-editor').value = data.content || '';
       state.dirty = false;
@@ -570,7 +543,8 @@
 
   function save() {
     if (!state.currentPath) { toast('请先选择一篇笔记'); return; }
-    api('/file', { method: 'PUT', body: { path: state.currentPath, content: currentText() } })
+    var text = state.mode === 'source' ? $('src-editor').value : MD.serialize(state.ast);
+    api('/file', { method: 'PUT', body: { path: state.currentPath, content: text } })
       .then(function () {
         state.dirty = false;
         updateSaveStatus();
@@ -636,7 +610,7 @@
       .then(function () {
         if (state.currentPath === n.path) {
           state.currentPath = null;
-          state.lines = [];
+          state.ast = { kind: 'document', blocks: [] };
           state.undoStack = [];
           $('src-editor').value = '';
           renderDocument();
@@ -722,92 +696,49 @@
     // 源码编辑器
     $('src-editor').addEventListener('input', markDirty);
 
-    // ===== 所见即所得编辑器 =====
+    // ===== AST 所见即所得编辑器 =====
     var box = $('wysiwyg');
 
+    // 普通输入：重建当前块 AST；内容未变则不重渲染（光标保持原生位置）
     box.addEventListener('input', function () {
       if (state.composing) return;
-      handleInput(); // 兜底路径（不支持 beforeinput 的浏览器）
+      handleInput();
     });
 
-    box.addEventListener('compositionstart', function () {
-      state.composing = true;
-      var pos = getCaretBlockAndDom();
-      state.compStart = pos ? { i: pos.i, off: srcOffAt(pos.i, pos.domOff) } : null;
-      state.compLines = state.lines.slice();
-    });
-    box.addEventListener('compositionend', function (e) {
+    box.addEventListener('compositionstart', function () { state.composing = true; });
+    box.addEventListener('compositionend', function () {
       state.composing = false;
-      var data = (e && e.data) || '';
-      if (state.compStart && data) {
-        // 以组合开始前的源码为基准插入最终文本（避免 DOM 回读丢失标记）
-        var blocks = docBlocksOf(state.compLines);
-        var res = EditorOps.insertTextOp(state.compLines, blocks, state.compStart.i, state.compStart.off, data);
-        state.compStart = null;
-        state.compLines = null;
-        pushUndo(0, 0);
-        applyOpResult(res);
-      } else {
-        handleInput();
-      }
-    });
-
-    // 核心：在浏览器改动 DOM 之前拦截输入，直接映射回源码（源码是唯一事实来源，
-    // 渲染 DOM 只是投影，从不回读），从根本上避免隐藏标记（#、**、- 等）丢失
-    box.addEventListener('beforeinput', function (e) {
-      if (state.composing || e.isComposing) return;
-      var it = e.inputType;
-      if (it === 'insertCompositionText' || it === 'insertFromPaste' || it === 'insertFromDrop') return;
-      var pos = getCaretBlockAndDom();
-      if (!pos) return;
-      var srcOff = srcOffAt(pos.i, pos.domOff);
-      var data = (e.data != null) ? e.data : '';
-      var res = null;
-      if (it === 'insertText' || it === 'insertLineBreak' || it === 'insertParagraph') {
-        e.preventDefault();
-        var blocks = docBlocks();
-        res = EditorOps.insertTextOp(state.lines, blocks, pos.i, srcOff, data === '' ? '\n' : data);
-      } else if (it === 'deleteContentBackward' || it === 'deleteWordBackward') {
-        e.preventDefault();
-        var blocks2 = docBlocks();
-        res = EditorOps.backspaceOp(state.lines, blocks2, pos.i, srcOff);
-      } else if (it === 'deleteContentForward' || it === 'deleteWordForward') {
-        e.preventDefault();
-        var blocks3 = docBlocks();
-        res = EditorOps.deleteOp(state.lines, blocks3, pos.i, srcOff);
-      } else {
-        return;
-      }
-      pushUndo(pos.i, srcOff);
-      applyOpResult(res);
+      handleInput();
     });
 
     box.addEventListener('keydown', function (e) {
       if (state.composing || e.isComposing) return;
-      var pos = getCaretBlockAndDom();
-      if (!pos) return;
-      var srcOff = srcOffAt(pos.i, pos.domOff);
-      var blockSrcLen = state.lines.slice(state.blocks[pos.i].start, state.blocks[pos.i].end).join('\n').length;
-
-      // 源码是唯一事实来源：直接基于 state.lines 操作，不做 DOM 回读
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        var blocks = docBlocks();
-        var res = EditorOps.enterOp(state.lines, blocks, pos.i, srcOff);
-        pushUndo(pos.i, srcOff);
+        var pos = getCaret();
+        if (!pos) return;
+        var res = EditorOps.enterInBlock(state.ast.blocks, pos.idx, pos.itemIdx, pos.off);
+        pushUndo(pos);
         applyOpResult(res);
-      } else if (e.key === 'Backspace' && srcOff === 0) {
-        e.preventDefault();
-        var blocks2 = docBlocks();
-        var res2 = EditorOps.backspaceOp(state.lines, blocks2, pos.i, 0);
-        pushUndo(pos.i, 0);
-        applyOpResult(res2);
-      } else if (e.key === 'Delete' && srcOff >= blockSrcLen) {
-        e.preventDefault();
-        var blocks3 = docBlocks();
-        var res3 = EditorOps.deleteOp(state.lines, blocks3, pos.i, blockSrcLen);
-        pushUndo(pos.i, blockSrcLen);
-        applyOpResult(res3);
+      } else if (e.key === 'Backspace' && !e.shiftKey) {
+        var pos2 = getCaret();
+        if (!pos2) return;
+        if (pos2.off === 0) {
+          e.preventDefault();
+          var res2 = EditorOps.backspaceAtStart(state.ast.blocks, pos2.idx, pos2.itemIdx);
+          pushUndo(pos2);
+          applyOpResult(res2);
+        }
+      } else if (e.key === 'Delete' && !e.shiftKey) {
+        var pos3 = getCaret();
+        if (!pos3) return;
+        var endOff = blockTextLen(state.ast.blocks[pos3.idx], pos3.itemIdx);
+        if (pos3.off >= endOff) {
+          e.preventDefault();
+          var res3 = EditorOps.deleteAtEnd(state.ast.blocks, pos3.idx, pos3.itemIdx);
+          pushUndo(pos3);
+          applyOpResult(res3);
+        }
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
         e.preventDefault();
         undo();
@@ -817,12 +748,10 @@
     box.addEventListener('paste', function (e) {
       e.preventDefault();
       var text = (e.clipboardData || window.clipboardData).getData('text/plain');
-      var pos = getCaretBlockAndDom();
+      var pos = getCaret();
       if (!pos || !text) return;
-      var srcOff = srcOffAt(pos.i, pos.domOff);
-      var blocks = docBlocks();
-      var res = EditorOps.insertTextOp(state.lines, blocks, pos.i, srcOff, text);
-      pushUndo(pos.i, srcOff);
+      var res = EditorOps.insertTextInBlock(state.ast.blocks, pos.idx, pos.itemIdx, pos.off, text);
+      pushUndo(pos);
       applyOpResult(res);
     });
 
@@ -837,13 +766,6 @@
       }
     });
     document.addEventListener('click', hideCtxMenu);
-  }
-
-  function markDirty() {
-    if (!state.dirty) {
-      state.dirty = true;
-      updateSaveStatus();
-    }
   }
 
   function init() {
