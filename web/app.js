@@ -381,6 +381,148 @@
     if (el) el.classList.add('md-editing');
   }
 
+  /* ---------- 方向键：跨块光标移动 ---------- */
+
+  // 当前光标的屏幕矩形（空行占位 <br> 时用块元素矩形兜底）
+  function caretRect() {
+    var sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    var r = sel.getRangeAt(0).cloneRange();
+    r.collapse(true);
+    var rect = r.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      var node = sel.anchorNode;
+      var blk = closestBlock(node && node.nodeType === 1 ? node : (node ? node.parentNode : null));
+      if (blk) rect = blk.getBoundingClientRect();
+    }
+    return rect;
+  }
+
+  // x,y 命中测试 → { el, domLocal }（块内 DOM 文本偏移）
+  function probe(x, y) {
+    if (!document.caretRangeFromPoint) return null;
+    var r = document.caretRangeFromPoint(x, y);
+    if (!r) return null;
+    var node = r.startContainer;
+    var blk = closestBlock(node.nodeType === 1 ? node : node.parentNode);
+    if (!blk) return null;
+    return { el: blk, domLocal: textOffsetIn(blk, node, r.startOffset) };
+  }
+
+  // 按几何位置找上/下相邻的块元素（与块间距无关，跳过当前块自身）
+  function adjacentBlockEl(dir) {
+    var c = getCaret();
+    if (!c) return null;
+    var rect = caretRect();
+    if (!rect) return null;
+    var y0 = dir < 0 ? rect.top : rect.bottom;
+    var kids = $('wysiwyg').children;
+    var best = null, bestD = 1e9;
+    for (var i = 0; i < kids.length; i++) {
+      var r = kids[i].getBoundingClientRect();
+      if (r.height === 0) continue;
+      var d = dir < 0 ? y0 - r.bottom : r.top - y0;
+      if (d > -2 && d < bestD) { best = kids[i]; bestD = d; }
+    }
+    return best;
+  }
+
+  // 在目标块内按 x 列取行内位置：先取块边缘行，再取块中部
+  function probeInBlock(el, x, dir) {
+    var r = el.getBoundingClientRect();
+    var hit = probe(x, dir < 0 ? r.bottom - 3 : r.top + 3);
+    if (hit && hit.el === el) return hit;
+    hit = probe(x, r.top + r.height / 2);
+    if (hit && hit.el === el) return hit;
+    return null;
+  }
+
+  // 目标块内放置光标：块级模型偏移（代码块映射 / 空正文标题列表项落到标记后）
+  function placeIntoBlock(el, dir) {
+    var tbi = el.dataset.i;
+    var tB = tbi === undefined ? null : state.blocks[parseInt(tbi, 10)];
+    var local;
+    if (!tB) {
+      local = 0;                                   // 虚拟尾段
+    } else if (dir < 0) {
+      local = tB.type === 'code' ? codeContentEnd(tB) : tB.text.length;
+    } else {
+      if (tB.type === 'code') local = codeContentStart(tB);
+      else if (tB.type === 'heading' || tB.type === 'li') local = tB.marker.length;
+      else local = 0;
+    }
+    el.focus();
+    placeCaretIn(el, domLocalFor(tB, local));
+    refreshEditing();
+  }
+
+  // 上/下：跨块移动（块内多行的代码块交给原生），返回是否已处理
+  function moveCaretVertically(dir) {
+    var c = getCaret();
+    if (!c) return false;
+    var bi = c.el.dataset.i;
+    var curB = bi === undefined ? null : state.blocks[parseInt(bi, 10)];
+
+    // 代码块内部（非首末行）不拦截，交给浏览器原生行间移动
+    if (curB && curB.type === 'code') {
+      var li = lineInfoInBlock(curB, c.local);
+      if (dir < 0 && li.line > curB.start + 1) return false;
+      if (dir > 0 && li.line < (codeHasClose(curB) ? curB.end - 1 : curB.end)) return false;
+    }
+
+    var rect = caretRect();
+    if (!rect) return false;
+    var box = $('wysiwyg');
+    var boxRect = box.getBoundingClientRect();
+    var x = Math.max(boxRect.left + 2, Math.min(rect.left + Math.max(rect.width / 2, 1), boxRect.right - 2));
+
+    var targetEl = adjacentBlockEl(dir);
+    if (!targetEl || targetEl === c.el) return false;
+    var hit = probeInBlock(targetEl, x, dir);
+    var domLocal = hit ? hit.domLocal : (dir < 0 ? textLenOf(targetEl) : 0);
+
+    if (targetEl.dataset.i === undefined) {
+      // 进入虚拟尾段
+      targetEl.focus();
+      placeCaretIn(targetEl, 0);
+      refreshEditing();
+      return true;
+    }
+    var tB = state.blocks[parseInt(targetEl.dataset.i, 10)];
+    var local = tB.type === 'code'
+      ? modelLocalFor(tB, targetEl, domLocal)
+      : domLocal;
+    // 空正文的标题/列表项：光标落到标记之后，避免停在被隐藏的标记区
+    if ((tB.type === 'heading' || tB.type === 'li') && tB.body === '' && local < tB.marker.length) {
+      local = tB.marker.length;
+    }
+    targetEl.focus();
+    placeCaretIn(targetEl, domLocalFor(tB, local));
+    refreshEditing();
+    return true;
+  }
+
+  // 左/右：跨块边界移动（块内交给原生），返回是否已处理
+  function moveCaretHorizontally(dir) {
+    var c = getCaret();
+    if (!c) return false;
+    var bi = c.el.dataset.i;
+    var curB = bi === undefined ? null : state.blocks[parseInt(bi, 10)];
+
+    var atEdge;
+    if (curB && curB.type === 'code') {
+      atEdge = dir < 0 ? c.local <= codeContentStart(curB) : c.local >= codeContentEnd(curB);
+    } else {
+      atEdge = dir < 0 ? c.local <= 0 : c.local >= (curB ? curB.text.length : 0);
+    }
+    if (!atEdge) return false;                     // 块内移动交给原生
+
+    var el = dir < 0 ? c.el.previousElementSibling : c.el.nextElementSibling;
+    if (!el || !el.classList || !el.classList.contains('md-blk')) return false;
+    placeIntoBlock(el, dir);
+    return true;
+  }
+
   /* ---------- 撤销 ---------- */
   function markDirty() {
     if (!state.dirty) {
@@ -597,7 +739,8 @@
   function doBackspace(c) {
     var idx = c.el.dataset.i;
     if (idx === undefined) return;
-    var b = state.blocks[parseInt(idx, 10)];
+    idx = parseInt(idx, 10);
+    var b = state.blocks[idx];
     var start = b.start;
     var target;
 
@@ -653,7 +796,8 @@
   function doDelete(c) {
     var idx = c.el.dataset.i;
     if (idx === undefined) return;
-    var b = state.blocks[parseInt(idx, 10)];
+    idx = parseInt(idx, 10);
+    var b = state.blocks[idx];
     var start = b.start;
     var contentEnd = b.type === 'code' ? codeContentEnd(b) : b.text.length;
     if (c.local < contentEnd) return;              // 块内删除交给浏览器
@@ -1037,6 +1181,14 @@
       }
       var sel = window.getSelection();
       var collapsed = sel && sel.isCollapsed;
+
+      // ===== 方向键：跨块光标移动（Shift 组合交给原生做选区扩展）=====
+      if (!e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && collapsed) {
+        if (e.key === 'ArrowUp' && moveCaretVertically(-1)) { e.preventDefault(); return; }
+        if (e.key === 'ArrowDown' && moveCaretVertically(1)) { e.preventDefault(); return; }
+        if (e.key === 'ArrowLeft' && moveCaretHorizontally(-1)) { e.preventDefault(); return; }
+        if (e.key === 'ArrowRight' && moveCaretHorizontally(1)) { e.preventDefault(); return; }
+      }
 
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();

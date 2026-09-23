@@ -156,14 +156,14 @@ header {
 #save-btn { background: var(--accent); color: #fff; border: none; }
 #save-btn:hover { background: var(--accent-hover); }
 
-#mode-btn, #theme-btn, #logout-btn {
+#theme-btn, #logout-btn {
   background: transparent;
   color: var(--header-muted);
   border: 1px solid #43506b;
   padding: 5px 9px;
 }
-#mode-btn:hover, #theme-btn:hover, #logout-btn:hover { background: #2a3a58; }
-#mode-btn svg, #theme-btn svg { width: 15px; height: 15px; }
+#theme-btn:hover, #logout-btn:hover { background: #2a3a58; }
+#theme-btn svg { width: 15px; height: 15px; }
 
 .layout { flex: 1; display: flex; min-height: 0; }
 
