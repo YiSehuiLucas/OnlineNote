@@ -23,7 +23,7 @@ func New(cfg *config.Config, st *store.Store, fsvc *service.Files) *gin.Engine {
 	r.Use(gin.Logger(), gin.Recovery())
 
 	sess := session.New(cfg.Auth.SessionSecret, time.Duration(cfg.Auth.SessionMaxAgeHours)*time.Hour)
-	limiter := middleware.NewIPLimiter(10, 5*time.Minute)
+	limiter := middleware.NewIPLimiter(30, 5*time.Minute) // 登录/注册限速：30 次 / 5 分钟，防爆破同时避免正常使用被误伤
 
 	authH := handler.NewAuth(st, sess, cfg.Auth.MaxUsers)
 	fileH := handler.NewFile(fsvc)

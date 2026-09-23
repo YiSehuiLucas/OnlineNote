@@ -210,7 +210,7 @@ header {
 
 .tree-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
 
-/* ============ 编辑区（单窗格） ============ */
+/* ============ 编辑区（单窗格原地渲染） ============ */
 #editor-pane {
   flex: 1;
   min-width: 0;
@@ -220,20 +220,7 @@ header {
   background: var(--editor-bg);
 }
 
-#src-editor {
-  flex: 1;
-  border: none;
-  resize: none;
-  padding: 20px 24px;
-  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
-  font-size: 14px;
-  line-height: 1.7;
-  outline: none;
-  background: var(--editor-bg);
-  color: var(--text);
-}
-
-/* 预览容器（所见即所得编辑区） */
+/* 原地渲染编辑区 */
 #wysiwyg {
   flex: 1;
   overflow: auto;
@@ -245,17 +232,20 @@ header {
   caret-color: var(--accent);
 }
 
+/* 空文档占位提示 */
+#wysiwyg.is-empty::before {
+  content: "点击这里，直接输入 Markdown（支持 # 标题 / - 列表 / 1. 编号 / --- 分隔线 / `代码` / ``` 代码块）";
+  display: block;
+  color: var(--muted);
+  font-style: italic;
+  padding: 4px 0;
+}
+#wysiwyg.is-empty:focus-within::before { display: none; }
+
 /* 可编辑块 */
 #wysiwyg [contenteditable="true"] { outline: none; }
 #wysiwyg [contenteditable="true"]:focus { outline: none; }
 #wysiwyg .md-blk::selection { background: rgba(74, 124, 247, 0.25); }
-
-.blk-empty {
-  color: var(--muted);
-  font-style: italic;
-  cursor: text;
-  padding: 4px 8px;
-}
 
 /* 模式提示条 */
 .mode-hint {
@@ -272,8 +262,8 @@ header {
   opacity: 0.9;
 }
 
-/* ============ Markdown 渲染 ============ */
-.markdown-body, #wysiwyg { line-height: 1.75; word-wrap: break-word; }
+/* ============ Markdown 原地渲染 ============ */
+#wysiwyg { line-height: 1.75; word-wrap: break-word; }
 #wysiwyg h1, #wysiwyg h2, #wysiwyg h3,
 #wysiwyg h4, #wysiwyg h5, #wysiwyg h6 {
   margin: 1.1em 0 0.45em;
@@ -286,16 +276,6 @@ header {
 #wysiwyg h5 { font-size: 1em; }
 #wysiwyg h6 { font-size: 0.95em; }
 #wysiwyg p { margin: 0.5em 0; }
-#wysiwyg hr { border: none; border-top: 1px solid var(--border); margin: 1.1em 0; }
-#wysiwyg blockquote {
-  margin: 0.7em 0;
-  padding: 2px 14px;
-  border-left: 4px solid var(--accent);
-  background: var(--hover);
-  color: var(--muted);
-}
-#wysiwyg ul, #wysiwyg ol { margin: 0.5em 0; padding-left: 1.8em; }
-#wysiwyg li { margin: 0.15em 0; }
 #wysiwyg code {
   font-family: Consolas, "Courier New", monospace;
   background: var(--code-bg);
@@ -303,7 +283,39 @@ header {
   padding: 1px 5px;
   font-size: 0.9em;
 }
-#wysiwyg pre {
+
+/* ===== 语法标记：始终保留在 DOM 文本里，CSS 控制隐藏/显示 ===== */
+
+/* 块级/行内标记默认隐藏（不占位），编辑当前行时显示 */
+.md-marker, .md-mark {
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+  white-space: nowrap;
+  color: transparent;
+}
+.md-editing .md-marker, .md-editing .md-mark { width: auto; color: var(--muted); }
+
+/* 有序列表序号始终可见（它就是渲染出的编号），编辑态降为提示色 */
+.md-oli .md-marker { width: auto; color: var(--accent); font-weight: 600; }
+.md-oli.md-editing .md-marker { color: var(--muted); font-weight: 400; }
+
+/* 列表项：紧排成列表效果 */
+.md-li, .md-oli { margin: 0.12em 0; }
+
+/* 无序列表：非编辑态显示 CSS 圆点，编辑态显示 - 标记 */
+.md-li::before {
+  content: "•";
+  color: var(--accent);
+  display: inline-block;
+  width: 1.2em;
+  margin-left: 0.2em;
+}
+.md-li.md-editing::before { display: none; }
+
+/* 代码块：DOM 只含代码内容（围栏在模型中），pre 环境避免 Chrome 吞并换行 */
+.md-code { white-space: pre; }
+#wysiwyg .md-code pre {
   background: var(--code-block-bg);
   color: var(--code-block-text);
   padding: 12px 14px;
@@ -311,9 +323,23 @@ header {
   overflow: auto;
   margin: 0.7em 0;
 }
-#wysiwyg pre code { background: transparent; padding: 0; color: inherit; }
-#wysiwyg img { max-width: 100%; }
-#wysiwyg a { color: var(--accent); }
+#wysiwyg .md-code pre code { background: transparent; padding: 0; color: inherit; font-size: 13px; }
+
+/* 分隔线：非编辑态渲染为一条线（--- 文字透明），编辑态显示 --- */
+.md-hr {
+  border-top: 1px solid var(--border);
+  color: transparent;
+  margin: 1.1em 0;
+  font-family: Consolas, "Courier New", monospace;
+  caret-color: transparent;
+  user-select: none;
+}
+.md-hr.md-editing {
+  color: var(--muted);
+  border-top: none;
+  caret-color: var(--accent);
+  user-select: text;
+}
 
 /* ============ 右键菜单 ============ */
 .ctx-menu {

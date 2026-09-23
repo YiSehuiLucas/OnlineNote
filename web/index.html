@@ -42,7 +42,6 @@ try { document.body.classList.toggle('dark', localStorage.getItem('onlinenote-th
     <div class="header-right">
       <span id="save-status" class="save-status"></span>
       <button id="save-btn">保存</button>
-      <button id="mode-btn" title="切换源码/预览模式（Ctrl+/）"></button>
       <button id="theme-btn" title="切换夜间主题"></button>
       <span id="username" class="username"></span>
       <button id="logout-btn">退出</button>
@@ -60,9 +59,7 @@ try { document.body.classList.toggle('dark', localStorage.getItem('onlinenote-th
     </aside>
 
     <main id="editor-pane">
-      <!-- 源码模式：一个大的文本框，和本地编辑 .md 文件一样 -->
-      <textarea id="src-editor" class="hidden" placeholder="在左侧选择或新建一篇笔记开始编辑…" spellcheck="false"></textarea>
-      <!-- 预览模式：纯渲染效果，点击任意位置回到源码编辑 -->
+      <!-- 原地渲染编辑区：直接输入 Markdown，输入即渲染 -->
       <div id="wysiwyg" class="wysiwyg"></div>
       <div id="mode-hint" class="mode-hint"></div>
     </main>
@@ -75,7 +72,6 @@ try { document.body.classList.toggle('dark', localStorage.getItem('onlinenote-th
 <div id="toast" class="toast hidden"></div>
 
 <script src="md.js"></script>
-<script src="editor-ops.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
