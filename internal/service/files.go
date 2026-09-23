@@ -1,4 +1,5 @@
 // Package service 提供笔记文件树操作，所有路径统一做穿越防护。
+// 每个用户拥有独立的笔记根目录（root/<用户名>/），用户之间笔记完全隔离。
 package service
 
 import (
@@ -7,11 +8,16 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"onlinenote/internal/model"
 )
+
+// usernameRe 与注册接口一致的用户名校验（防御性二次校验，防止路径注入）。
+var usernameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{2,32}$`)
 
 var (
 	// ErrInvalidPath 非法路径（含目录穿越尝试）。
@@ -41,6 +47,42 @@ func NewFiles(root string) (*Files, error) {
 		return nil, fmt.Errorf("创建笔记根目录失败: %w", err)
 	}
 	return &Files{root: abs}, nil
+}
+
+// ForUser 返回当前用户的笔记服务：根目录为 root/<用户名>/。
+// 用户名在注册时已按 [A-Za-z0-9_-]{2,32} 校验，这里做防御性二次校验，
+// 保证用户名不能构造出根目录之外的路径。
+func (f *Files) ForUser(username string) (*Files, error) {
+	if !usernameRe.MatchString(username) {
+		return nil, ErrInvalidPath
+	}
+	abs := filepath.Join(f.root, username)
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return nil, fmt.Errorf("创建用户笔记目录失败: %w", err)
+	}
+	return &Files{root: abs}, nil
+}
+
+// ArchiveUserDir 将用户的笔记目录重命名为隐藏归档目录（删除用户时调用，
+// 防止同名账号重新注册后继承旧笔记；隐藏目录不会出现在目录树中）。
+func (f *Files) ArchiveUserDir(username string, uid int64) error {
+	src := filepath.Join(f.root, username)
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil // 该用户没有笔记，无需归档
+		}
+		return err
+	}
+	dst := filepath.Join(f.root, fmt.Sprintf(".deleted-%s-%d", username, uid))
+	// 归档目录已存在（罕见：同名账号被反复删除）时追加时间戳避免冲突
+	if _, err := os.Stat(dst); err == nil {
+		dst = filepath.Join(f.root, fmt.Sprintf(".deleted-%s-%d-%d", username, uid, time.Now().Unix()))
+	}
+	if err := os.Rename(src, dst); err != nil {
+		// 目录被占用等极端情况：不阻塞账号删除，但要明确告知管理员
+		return fmt.Errorf("归档笔记目录失败（账号已删除，笔记目录保留在 %s）: %w", src, err)
+	}
+	return nil
 }
 
 // resolve 将相对路径解析为根目录内的绝对路径，防止目录穿越。

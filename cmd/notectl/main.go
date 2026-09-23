@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"onlinenote/internal/config"
+	"onlinenote/internal/service"
 	"onlinenote/internal/store"
 )
 
@@ -51,13 +52,13 @@ func main() {
 		}
 		usage()
 	case "user":
-		handleUser(st, args[1:])
+		handleUser(st, cfg, args[1:])
 	default:
 		usage()
 	}
 }
 
-func handleUser(st *store.Store, args []string) {
+func handleUser(st *store.Store, cfg *config.Config, args []string) {
 	if len(args) == 0 {
 		usage()
 		return
@@ -125,8 +126,19 @@ func handleUser(st *store.Store, args []string) {
 		if username == "" {
 			log.Fatal("请输入用户名")
 		}
+		// 先取用户 ID（归档笔记目录需要），再删除账号
+		user, err := st.GetUserByName(username)
+		if err != nil {
+			log.Fatalf("删除失败: %v", err)
+		}
 		if err := st.DeleteUserByUsername(username); err != nil {
 			log.Fatalf("删除失败: %v", err)
+		}
+		// 归档该用户的笔记目录（防止同名账号重新注册后继承旧笔记）
+		if fsvc, err := service.NewFiles(cfg.Storage.Root); err == nil {
+			if err := fsvc.ArchiveUserDir(username, user.ID); err != nil {
+				fmt.Printf("警告: %v\n", err)
+			}
 		}
 		fmt.Printf("用户已删除: %s\n", username)
 	case "list":
