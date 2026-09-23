@@ -1,14 +1,14 @@
 # OnlineNote
 
-个人自用的在线笔记软件（初版 v0.1）。浏览器访问，Markdown 编辑 + 实时预览，笔记以真实文件目录树组织，支持登录与注册（默认最多 5 个账号）。
+个人自用的在线笔记软件。浏览器访问，Markdown 原地渲染编辑（类 Typora：输入即渲染），笔记以真实文件目录树组织，支持登录与注册（默认最多 5 个账号）。
 
 ## 功能特性
 
-- ✅ **Typora 式所见即所得编辑**：直接在渲染的预览中书写，输入即实时渲染（`# ` 变标题、`**文字**` 变粗体、`- ` 变列表），中文输入法无干扰
-- ✅ 单窗格「所见即所得 ⇄ 源码」切换（`Ctrl+/`），源码模式与本地编辑 `.md` 一致
-- ✅ 编辑体验：Enter 换段、列表自动续项、块边界退格/删除合并、`Ctrl+Z` 撤销、`Ctrl+S` 保存
-- ✅ Markdown 基础语法：标题、列表、引用、代码块、链接、图片、加粗、删除线等
-- ✅ 文件目录树：SVG 精美图标、新建 / 重命名 / 删除笔记与文件夹（右键菜单）
+- ✅ **原地渲染编辑（类 Typora）**：直接在渲染效果上书写，输入即渲染——`# ` 变标题、`- ` 出现圆点、`1. ` 出现编号、`---` 变成分隔线、`` ` `` 变为行内代码、``` ``` 打开多行代码块；编辑当前行时显示原始语法标记，离开后自动隐藏
+- ✅ **方向键光标导航**：↑↓ 跨块上下移动（保持列位置，代码块内逐行移动、进出代码块），←→ 在块边界正确切换（进入标题/列表项时落到正文开头）
+- ✅ **编辑体验**：Enter 换段、列表自动续项（有序列表自动续号）、空列表项回车退出列表、块边界退格/删除合并、`Ctrl+Z` 撤销、`Ctrl+S` 保存、中文输入法无干扰
+- ✅ **Markdown 语法（当前支持）**：标题（`#`~`######`）、无序列表（`- `）、有序列表（`1. `）、分隔线（`---`）、行内代码（`` ` ``）、围栏代码块（``` ```）
+- ✅ 文件目录树：SVG 图标、新建 / 重命名 / 删除笔记与文件夹（右键菜单）
 - ✅ 用户登录 / 注册，注册人数上限默认 5（`auth.max_users` 可配置）
 - ✅ **夜间主题**一键切换，自动记忆
 - ✅ 笔记即文件：`data/notes/` 下的 `.md` 文件可直接备份、迁移、离线查看
@@ -16,8 +16,8 @@
 
 ## 技术栈
 
-- **后端**：Go 1.24+ / Gin / SQLite（modernc 纯 Go 驱动）/ bcrypt / HMAC Cookie 会话
-- **前端**：原生 HTML/CSS/JS 静态页面（零构建），内置轻量 Markdown 引擎（块级渲染 + 源码⇄DOM 位置映射）
+- **后端**：Go 1.25+ / Gin / SQLite（modernc 纯 Go 驱动，免 CGO，可交叉编译）/ bcrypt / HMAC Cookie 会话
+- **前端**：原生 HTML/CSS/JS 静态页面（零构建），内置轻量 Markdown 引擎（`md.js`：行级解析；`app.js`：原地渲染编辑器）
 - **部署**：nginx 反向代理 + systemd
 
 ## 目录结构
@@ -29,6 +29,7 @@ OnlineNote/
 ├── internal/            后端实现（config/model/store/service/session/middleware/handler/server）
 ├── web/                 前端静态页面（index.html / style.css / app.js / md.js）
 ├── doc/设计方案.md       设计文档
+├── doc/部署说明.md       部署指南
 ├── configs/config.yaml  配置示例
 ├── deploy/              nginx.conf 与 systemd 单元
 └── data/                运行时数据（笔记文件 + SQLite，已 gitignore）
@@ -79,11 +80,14 @@ go build -o bin/notectl ./cmd/notectl
 
 ## 生产部署
 
-1. 上传 `bin/`、`web/`、`configs/` 到 `/opt/onlinenote/`，修改 `config.yaml`（端口、密钥、域名）。
+完整的部署流程（编译 → 上传 → systemd → nginx → 验证）见 [doc/部署说明.md](doc/部署说明.md)，要点：
+
+1. 编译 Linux 二进制并上传 `bin/`、`web/`、`configs/` 到 `/opt/onlinenote/`，修改 `config.yaml`（端口、密钥、域名）。
 2. nginx：复制 `deploy/nginx.conf` 到 `/etc/nginx/conf.d/onlinenote.conf`，改 `server_name` 后 `nginx -s reload`。
 3. systemd：复制 `deploy/onlinenote.service` 到 `/etc/systemd/system/`，`systemctl enable --now onlinenote`。
-4. 浏览器访问 `http://你的域名/`，注册或登录。
+4. 浏览器访问你的域名（或服务器 IP），注册或登录。
 
 ## 文档
 
 - 设计文档：[doc/设计方案.md](doc/设计方案.md)
+- 部署指南：[doc/部署说明.md](doc/部署说明.md)
